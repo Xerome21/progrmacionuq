@@ -138,11 +138,6 @@ ztwocalc()
     
 zonesort()
 
-        
-        
 
-    
-    
-    
-        
-        
+#codigo escrito y testeado por Mr.Blackberry#
+    #e1bcb9ceb5cf81cf8ecebdcf85cebccebfcf82#
