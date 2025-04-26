@@ -1,24 +1,39 @@
+import os
+import io  # Import io to handle in-memory file-like objects
+from PIL import Image
+from datetime import datetime
 import parking_client
-# pip install pillow
-from PIL import  Image
-import io
 
-# Intenta registrar un usuario
-id=11111111
-password="00000"
-program="Electronics Engineering"
-role="Student"
-url="http://localhost:80"
-print(parking_client.registerUser(url,id,password,program,role))
+# User information
+id = 280
+password = "love4lucy"
+program = "economy"
+role = "professor"
+url = "http://192.168.1.63:9090"
+
+# Register the user
+print(parking_client.registerUser(url, id, password, program, role))
+
+# Request a QR code from the server
+imgBytes = parking_client.getQR(url, id, password)
+
+if imgBytes is None:
+    print("Failed to retrieve QR code: User not found or invalid credentials")
+else:
+    # Save the QR code with a unique name
+    qr_folder = "C:/Users/kkyto/Desktop/qr_codes/"
+    os.makedirs(qr_folder, exist_ok=True)
+    qr_filename = f"qr_code_{id}_{int(datetime.now().timestamp())}.png"
+    save_path = os.path.join(qr_folder, qr_filename)
+
+    # Save the QR code
+    image = Image.open(io.BytesIO(imgBytes))
+    image.save(save_path)
+    print(f"QR code saved to {save_path}")
+
+    # Send the QR code to the server
+    parking_client.sendQR(url, save_path)
 
 
-# Solicita un código QR al servidor (los códigos QR cambian cada fecha o cuando se reinicia el servidor)
-imgBytes=parking_client.getQR(url,id,password)
-# Obtiene un código QR y lo visualiza
-image = Image.open(io.BytesIO(imgBytes))
-image.show()
-
-
-parking_client.sendQR(url,"qr.png")
 
 

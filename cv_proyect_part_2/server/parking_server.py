@@ -1,4 +1,3 @@
-
 import argparse
 from urllib.parse import urlparse
 from urllib.parse import parse_qs
@@ -18,19 +17,24 @@ class RequestHandler(BaseHTTPRequestHandler):
         super().__init__(request, client_address, server_class)
 
     def do_GET(self):
-        resource=urlparse(self.path).path
+        resource = urlparse(self.path).path
         match resource:
-                    
-            case '/getqr':                            
-                content_len = int(self.headers.get('Content-Length'))
-                post_body = self.rfile.read(content_len)
-                params_dict=parse_qs(post_body.decode(), strict_parsing=True)
-                png=users.getQR(params_dict['id'][0],params_dict['password'][0])     
-                self.send_response(200)
-                self.send_header('Content-type', 'image/png')
-                self.end_headers()
-                self.wfile.write(png.getvalue())     
-                self.wfile.flush()  
+            case '/getqr':
+                try:
+                    query_params = parse_qs(urlparse(self.path).query)
+                    id = query_params.get('id', [None])[0]
+                    password = query_params.get('password', [None])[0]
+                    if not id or not password:
+                        raise ValueError("Missing 'id' or 'password'")
+                    png = users.getQR(id, password)
+                    self.send_response(200)
+                    self.send_header('Content-type', 'image/png')
+                    self.end_headers()
+                    self.wfile.write(png)
+                except Exception as e:
+                    self.send_error(400, f"Bad Request: {e}")
+                finally:
+                    self.wfile.flush()  
 
 
     def do_POST(self):
@@ -73,14 +77,14 @@ def main():
     parser.add_argument(
         "-l",
         "--listen",
-        default="0.0.0.0",
+        default="192.168.1.63",
         help="Specify the IP address which server should listen",
     )
     parser.add_argument(
         "-p",
         "--port",
         type=int,
-        default=80,
+        default=9090,  # Change to an available port
         help="Specify the port which server should listen",
     )
     args = parser.parse_args()
