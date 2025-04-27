@@ -1,10 +1,3 @@
-# Estos son los paquetes que se deben instalar
-# pip install pycryptodome
-# pip install qrcode[pil]  # Reemplaza a pyqrcode y pypng
-# pip install pyzbar
-# pip install pillow
-
-# No modificar estos módulos que se importan
 from pyzbar.pyzbar import decode
 from PIL import Image
 from json import dumps
@@ -12,18 +5,20 @@ from json import loads
 from hashlib import sha256
 from Crypto.Cipher import AES
 import base64
-import qrcode  # Reemplaza a pyqrcode
+import qrcode
 from os import urandom
 import io
-from datetime import datetime
+from datetime import datetime, time
 
 # Nombre del archivo con la base de datos de usuarios
-usersFileName="users.txt"
+usersFileName = "users.txt"
+# Archivo para rastrear los QRs activos
+active_qrs_file = "active_qrs.json"
 
 # Fecha actual
-date=None
+date = None
 # Clave aleatoria para encriptar el texto de los códigos QR
-key=None
+key = None
 
 # Función para encriptar (no modificar)
 def encrypt_AES_GCM(msg, secretKey):
@@ -38,35 +33,41 @@ def decrypt_AES_GCM(encryptedMsg, secretKey):
     plaintext = aesCipher.decrypt_and_verify(ciphertext, authTag)
     return plaintext
 
-# Función que genera un código QR (modificada para usar qrcode en lugar de pyqrcode)
-def generateQR(id,program,role,buffer):
+# Función que genera un código QR
+def generateQR(id, program, role, buffer):
     # Variables globales para la clave y la fecha
     global key
     global date
-
+    
     # Información que irá en el código QR, antes de encriptar
-    data={'id': id, 'program':program,'role':role}
-    datas=dumps(data).encode("utf-8")
+    current_datetime = datetime.now()
+    qr_id = f"{id}_{current_datetime.strftime('%Y%m%d%H%M%S')}"
+    data = {'id': id, 'program': program, 'role': role, 'qr_id': qr_id}
+    datas = dumps(data).encode("utf-8")
 
     # Si no se ha asignado una clave se genera
     if key is None:
-        key =urandom(32) 
+        key = urandom(32) 
         # Se almacena la fecha actual
-        date=datetime.today().strftime('%Y-%m-%d')
-    
+        date = datetime.today().strftime('%Y-%m-%d')
+        print(f"Generated encryption key: {key.hex()}")  # Imprime la clave generada
+
     # Si cambió la fecha actual se genera una nueva clave y 
     # se actualiza la fecha
-    if date !=datetime.today().strftime('%Y-%m-%d'):
-        key =urandom(32) 
-        date=datetime.today().strftime('%Y-%m-%d')
+    if date != datetime.today().strftime('%Y-%m-%d'):
+        key = urandom(32) 
+        date = datetime.today().strftime('%Y-%m-%d')
+        print(f"Updated encryption key: {key.hex()}")  # Imprime la clave actualizada
+        # Al cambiar de día, ejecutamos la limpieza de QRs expirados
+        cleanup_expired_qrs()
 
     # Se encripta la información
-    encrypted = list(encrypt_AES_GCM(datas,key))
+    encrypted = list(encrypt_AES_GCM(datas, key))
 
     # Se crea un JSON convirtiendo los datos encriptados a base64 para poder usar texto en el QR
-    qr_text=dumps({'qr_text0':base64.b64encode(encrypted[0]).decode('ascii'),
-                   'qr_text1':base64.b64encode(encrypted[1]).decode('ascii'),
-                   'qr_text2':base64.b64encode(encrypted[2]).decode('ascii')})
+    qr_text = dumps({'qr_text0': base64.b64encode(encrypted[0]).decode('ascii'),
+                    'qr_text1': base64.b64encode(encrypted[1]).decode('ascii'),
+                    'qr_text2': base64.b64encode(encrypted[2]).decode('ascii')})
     
     # Se crea el código QR a partir del JSON usando la biblioteca qrcode
     qr = qrcode.QRCode(
@@ -81,12 +82,91 @@ def generateQR(id,program,role,buffer):
     # Se genera una imagen PNG que se escribe en el buffer
     img = qr.make_image(fill_color="black", back_color="white")
     img.save(buffer, format="PNG")
+    
+    # Registrar el QR como activo con su fecha de expiración
+    try:
+        with open(active_qrs_file, 'r') as f:
+            active_qrs = loads(f.read())
+    except FileNotFoundError:
+        active_qrs = {}
+    
+    # Registrar el QR como activo con la fecha actual
+    active_qrs[qr_id] = {
+        'user_id': id,
+        'creation_date': current_datetime.strftime('%Y-%m-%d'),
+        'creation_time': current_datetime.strftime('%H:%M:%S')
+    }
+    
+    with open(active_qrs_file, 'w') as f:
+        f.write(dumps(active_qrs))
+    
+    return qr_id
 
-# Se debe codificar esta función
-# Argumentos: id (entero), password (cadena), program (cadena) y role (cadena)
-# Si el usuario ya existe deber retornar  "User already registered"
-# Si el usuario no existe debe registar el usuario en la base de datos y retornar  "User succesfully registered"
-def registerUser(id,password,program,role):
+# Función para verificar si un QR sigue siendo válido
+def is_qr_valid(qr_id, user_id):
+    try:
+        # Cargar los QRs activos
+        with open(active_qrs_file, 'r') as f:
+            active_qrs = loads(f.read())
+        
+        # Verificar si el QR está en la lista de activos
+        if qr_id in active_qrs:
+            # Verificar que pertenezca al usuario correcto
+            if active_qrs[qr_id]['user_id'] == user_id:
+                # Verificar si el QR fue creado hoy
+                qr_date = active_qrs[qr_id]['creation_date']
+                current_date = datetime.today().strftime('%Y-%m-%d')
+                
+                return qr_date == current_date
+    except FileNotFoundError:
+        return False
+    
+    return False
+
+# Función para invalidar un QR
+def invalidate_qr(qr_id):
+    try:
+        with open(active_qrs_file, 'r') as f:
+            active_qrs = loads(f.read())
+        
+        if qr_id in active_qrs:
+            del active_qrs[qr_id]
+            
+            with open(active_qrs_file, 'w') as f:
+                f.write(dumps(active_qrs))
+            
+            return True
+    except FileNotFoundError:
+        pass
+    
+    return False
+
+# Función para limpiar QRs caducados (al final del día)
+def cleanup_expired_qrs():
+    try:
+        current_date = datetime.today().strftime('%Y-%m-%d')
+        
+        with open(active_qrs_file, 'r') as f:
+            active_qrs = loads(f.read())
+        
+        # Filtrar solo los QRs creados hoy
+        valid_qrs = {qr_id: info for qr_id, info in active_qrs.items() 
+                    if info['creation_date'] == current_date}
+        
+        # Guardar solo los QRs válidos
+        with open(active_qrs_file, 'w') as f:
+            f.write(dumps(valid_qrs))
+            
+        print(f"Cleaned up {len(active_qrs) - len(valid_qrs)} expired QR codes")
+        return len(active_qrs) - len(valid_qrs)  # Número de QRs eliminados
+    except FileNotFoundError:
+        # Si el archivo no existe, crear uno vacío
+        with open(active_qrs_file, 'w') as f:
+            f.write(dumps({}))
+        return 0
+
+# Función que registra un usuario
+def registerUser(id, password, program, role):
     try:
         # Intentamos abrir el archivo para ver si existe y leer los usuarios actuales
         with open(usersFileName, 'r') as file:
@@ -118,8 +198,7 @@ def registerUser(id,password,program,role):
     
     return "User succesfully registered"
 
-# Función que genera el código QR
-# retorna el código QR si el id y la contraseña son correctos (usuario registrado)
+# Función que genera el código QR para un usuario
 def getQR(id, password):
     buffer = io.BytesIO()
     
@@ -145,31 +224,37 @@ def getQR(id, password):
         # Si el archivo no existe, no hay usuarios registrados
         return None
 
-# Función que recibe el código QR como PNG
-# debe verificar si el QR contiene datos que pueden ser desencriptados con la clave (key), y si el usuario está registrado
-# Debe asignar un puesto de parqueadero dentro de los disponibles.
+# Función que procesa el código QR enviado
 def sendQR(png):
     try:
-        # Decodifica código QR
+        # Decode the QR code
         decodedQR = decode(Image.open(io.BytesIO(png)))[0].data.decode('ascii')
 
-        # Convierte el JSON en el texto del código QR a un diccionario
+        # Convert the JSON in the QR code text to a dictionary
         data = loads(decodedQR)
 
-        # Desencripta con la clave actual, decodificando antes desde base64
+        # Decrypt with the current key, decoding from base64 first
         decrypted = loads(decrypt_AES_GCM((
             base64.b64decode(data["qr_text0"]),
             base64.b64decode(data["qr_text1"]),
             base64.b64decode(data["qr_text2"])
         ), key))
         print("Decrypted QR Code Data:", decrypted)
+        
+        # Extraer el ID del usuario y el ID único del QR
+        user_id = decrypted.get('id')
+        qr_id = decrypted.get('qr_id')
+        
+        # Verificar que el QR sea válido y no haya caducado
+        if not is_qr_valid(qr_id, user_id):
+            return "QR code expired or invalid"
 
-        # Verificar que el usuario esté registrado
+        # Verify that the user is registered
         try:
             with open(usersFileName, 'r') as file:
                 users = file.readlines()
             
-            # Buscar al usuario en la base de datos
+            # Search for the user in the database
             user_found = False
             for user in users:
                 user_data = loads(user.strip())
@@ -180,7 +265,7 @@ def sendQR(png):
             if not user_found:
                 return "Invalid QR code: User not registered"
             
-            # Determinar qué puestos están disponibles según el rol
+            # Determine available spots based on the role
             available_spots_file = "available_spots.json"
             try:
                 with open(available_spots_file, 'r') as f:
@@ -194,18 +279,66 @@ def sendQR(png):
                 }
 
             role = decrypted.get('role').lower()
-            if role in available_spots and available_spots[role]:
-                # Asignar el primer puesto disponible
-                spot = available_spots[role].pop(0)
+            assigned_spots_file = "assigned_spots.json"
+            scan_state_file = "scan_state.json"
 
-                # Save the updated parking spots back to the file
-                with open(available_spots_file, 'w') as f:
-                    f.write(dumps(available_spots))
+            # Load assigned spots
+            try:
+                with open(assigned_spots_file, 'r') as f:
+                    assigned_spots = loads(f.read())
+            except FileNotFoundError:
+                assigned_spots = {}
 
-                return f"Parking spot assigned: {spot}"
-            else:
-                return "No parking spots available for your role"
-                
+            # Load scan state
+            try:
+                with open(scan_state_file, 'r') as f:
+                    scan_state = loads(f.read())
+            except FileNotFoundError:
+                scan_state = {}
+
+            user_id_str = str(user_id)
+
+            # Check the scan state of the user
+            if user_id_str not in scan_state:
+                # First scan: Assign a parking spot
+                if role in available_spots and available_spots[role]:
+                    spot = available_spots[role].pop(0)
+                    assigned_spots[user_id_str] = spot
+                    scan_state[user_id_str] = 1  # Mark as first scan (entering)
+                    
+                    # Save the updated parking spots and scan state
+                    with open(available_spots_file, 'w') as f:
+                        f.write(dumps(available_spots))
+                    with open(assigned_spots_file, 'w') as f:
+                        f.write(dumps(assigned_spots))
+                    with open(scan_state_file, 'w') as f:
+                        f.write(dumps(scan_state))
+
+                    return f"Parking spot assigned: {spot}"
+                else:
+                    return "No parking spots available for your role"
+            elif scan_state[user_id_str] == 1:
+                # Second scan: User is leaving, make the spot available again
+                if user_id_str in assigned_spots:
+                    previous_spot = assigned_spots.pop(user_id_str)
+                    available_spots[role].append(previous_spot)
+                    # Reiniciamos el estado de escaneo para permitir nuevos ciclos
+                    scan_state.pop(user_id_str)  
+
+                    # Save the updated parking spots and scan state
+                    with open(available_spots_file, 'w') as f:
+                        f.write(dumps(available_spots))
+                    with open(assigned_spots_file, 'w') as f:
+                        f.write(dumps(assigned_spots))
+                    with open(scan_state_file, 'w') as f:
+                        f.write(dumps(scan_state))
+                    
+                    # Invalidar el QR después del segundo escaneo
+                    invalidate_qr(qr_id)
+
+                    return f"Spot {previous_spot} is now available again. User has left the building."
+                else:
+                    return "No assigned parking spot found for this user"
         except FileNotFoundError:
             return "Invalid QR code: User database not found"
             

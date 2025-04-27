@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkinter import ttk  # Import ttk for the Combobox
 from PIL import Image, ImageTk
 import parking_client
 import os
@@ -14,7 +15,7 @@ def register_user():
     id = entry_id.get()
     password = entry_password.get()
     program = entry_program.get()
-    role = entry_role.get()
+    role = role_combobox.get()  # Get the selected role from the dropdown
 
     if not id or not password or not program or not role:
         messagebox.showerror("Error", "All fields are required!")
@@ -61,6 +62,7 @@ def send_qr():
 
     response = parking_client.sendQR(SERVER_URL, qr_file)
     if response:
+        # Display the server's response, including parking spot assignment
         messagebox.showinfo("QR Code Sent", response.decode('utf-8'))
     else:
         messagebox.showerror("Error", "Failed to send QR code")
@@ -86,8 +88,9 @@ entry_program = tk.Entry(frame_inputs)
 entry_program.grid(row=2, column=1)
 
 tk.Label(frame_inputs, text="Role:").grid(row=3, column=0, sticky="e")
-entry_role = tk.Entry(frame_inputs)
-entry_role.grid(row=3, column=1)
+role_combobox = ttk.Combobox(frame_inputs, values=["student", "professor", "administrative"], state="readonly")
+role_combobox.grid(row=3, column=1)
+role_combobox.set("student")  # Set default value
 
 # Create buttons for actions
 frame_buttons = tk.Frame(root, padx=10, pady=10)
