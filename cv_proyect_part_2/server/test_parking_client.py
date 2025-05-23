@@ -5,10 +5,10 @@ from datetime import datetime
 import parking_client
 
 # User information
-id = 280
-password = "love4lucy"
+id = 1234
+password = "yahoo"
 program = "economy"
-role = "professor"
+role = "student"
 url = "http://192.168.1.63:9090"
 
 # Register the user

@@ -1,5 +1,5 @@
 import argparse
-from urllib.parse import urlparse
+from urllib.parse import urlparse 
 from urllib.parse import parse_qs
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from json import dumps

@@ -1,113 +1,184 @@
-import tkinter as tk
-from tkinter import filedialog, messagebox
-from tkinter import ttk  # Import ttk for the Combobox
-from PIL import Image, ImageTk
+from PyQt5.QtCore import *
+from PyQt5.QtGui import *
+from PyQt5.QtWidgets import *
+from PIL import Image
 import parking_client
+from parking_client import sendQR  # <-- Agrega esta línea
 import os
 import io
 from datetime import datetime
+import cv2
+from pyzbar.pyzbar import decode
+import numpy as np
 
-# Server URL
 SERVER_URL = "http://192.168.1.63:9090"
 
-# Function to register a user
-def register_user():
-    id = entry_id.get()
-    password = entry_password.get()
-    program = entry_program.get()
-    role = role_combobox.get()  # Get the selected role from the dropdown
+class CameraThread(QThread):
+    frame_signal = pyqtSignal(QImage)
+    qr_result_signal = pyqtSignal(str)
 
-    if not id or not password or not program or not role:
-        messagebox.showerror("Error", "All fields are required!")
-        return
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.is_running = True
+        self.capture = None
 
-    response = parking_client.registerUser(SERVER_URL, id, password, program, role)
-    messagebox.showinfo("Registration", response)
+    def run(self):
+        self.capture = cv2.VideoCapture('http://192.168.1.72:8080/video')
+        if not self.capture.isOpened():
+            self.qr_result_signal.emit("No se pudo acceder a la cámara.")
+            return
 
-# Function to request a QR code
-def request_qr():
-    id = entry_id.get()
-    password = entry_password.get()
+        while self.is_running:
+            ret, frame = self.capture.read()
+            if not ret:
+                continue
 
-    if not id or not password:
-        messagebox.showerror("Error", "ID and Password are required!")
-        return
+            # Emitir frame para mostrar en la GUI
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb_frame.shape
+            bytes_per_line = ch * w
+            qt_image = QImage(rgb_frame.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            self.frame_signal.emit(qt_image)
 
-    imgBytes = parking_client.getQR(SERVER_URL, id, password)
-    if imgBytes is None:
-        messagebox.showerror("Error", "Failed to retrieve QR code: User not found or invalid credentials")
-        return
+            # Decodificar QR
+            pil_img = Image.fromarray(rgb_frame)
+            decoded_objs = decode(pil_img)
+            if decoded_objs:
+                qr_data = decoded_objs[0].data  # bytes
+                qr_text = qr_data.decode('utf-8')
+                result = sendQR(SERVER_URL, qr_text)
+                self.qr_result_signal.emit(result)
+                break
 
-    # Save the QR code
-    qr_folder = "C:/Users/kkyto/Desktop/qr_codes/"
-    os.makedirs(qr_folder, exist_ok=True)
-    qr_filename = f"qr_code_{id}_{int(datetime.now().timestamp())}.png"
-    save_path = os.path.join(qr_folder, qr_filename)
+        if self.capture is not None:
+            self.capture.release()
 
-    image = Image.open(io.BytesIO(imgBytes))
-    image.save(save_path)
+    @pyqtSlot()
+    def stop_capture(self):
+        self.is_running = False
+        if self.capture is not None:
+            self.capture.release()
 
-    # Display the QR code in the GUI
-    qr_image = ImageTk.PhotoImage(image.resize((200, 200)))
-    qr_label.config(image=qr_image)
-    qr_label.image = qr_image
+class CameraWindow(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Escanear QR")
+        self.setFixedSize(640, 480)
+        self.label = QLabel(self)
+        self.label.setAlignment(Qt.AlignCenter)
+        layout = QVBoxLayout()
+        layout.addWidget(self.label)
+        self.setLayout(layout)
 
-    messagebox.showinfo("QR Code", f"QR code saved to {save_path}")
+    def update_frame(self, image):
+        self.label.setPixmap(QPixmap.fromImage(image))
 
-# Function to send a QR code
-def send_qr():
-    qr_file = filedialog.askopenfilename(filetypes=[("PNG Files", "*.png")])
-    if not qr_file:
-        return
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Parking Client GUI")
 
-    response = parking_client.sendQR(SERVER_URL, qr_file)
-    if response:
-        # Display the server's response, including parking spot assignment
-        messagebox.showinfo("QR Code Sent", response.decode('utf-8'))
-    else:
-        messagebox.showerror("Error", "Failed to send QR code")
+        # Labels
+        l1 = QLabel('ID:')
+        l2 = QLabel('Contraseña:')
+        l3 = QLabel('Programa:')
+        l4 = QLabel('Rol:')
 
-# Create the main window
-root = tk.Tk()
-root.title("Parking Client GUI")
+        # Inputs
+        self.e1 = QLineEdit()
+        self.e2 = QLineEdit()
+        self.e2.setEchoMode(QLineEdit.Password)
+        self.e3 = QLineEdit()
+        self.role_combo = QComboBox()
+        self.role_combo.addItems(["student", "professor", "administrative"])
 
-# Create input fields for user information
-frame_inputs = tk.Frame(root, padx=10, pady=10)
-frame_inputs.pack()
+        # Buttons
+        b_register = QPushButton('Registrar Usuario')
+        b_register.clicked.connect(self.register_user)
+        b_qr = QPushButton('Obtener QR')
+        b_qr.clicked.connect(self.request_qr)
+        b_send = QPushButton('Enviar QR')
+        b_send.clicked.connect(self.send_qr)
 
-tk.Label(frame_inputs, text="ID:").grid(row=0, column=0, sticky="e")
-entry_id = tk.Entry(frame_inputs)
-entry_id.grid(row=0, column=1)
+        # QR label
+        self.qr_label = QLabel("El QR aparecerá aquí")
+        self.qr_label.setAlignment(Qt.AlignCenter)
+        self.qr_label.setFixedSize(220, 220)
 
-tk.Label(frame_inputs, text="Password:").grid(row=1, column=0, sticky="e")
-entry_password = tk.Entry(frame_inputs, show="*")
-entry_password.grid(row=1, column=1)
+        # Layout
+        grid = QGridLayout()
+        grid.addWidget(l1, 0, 0)
+        grid.addWidget(self.e1, 0, 1)
+        grid.addWidget(l2, 1, 0)
+        grid.addWidget(self.e2, 1, 1)
+        grid.addWidget(l3, 2, 0)
+        grid.addWidget(self.e3, 2, 1)
+        grid.addWidget(l4, 3, 0)
+        grid.addWidget(self.role_combo, 3, 1)
+        grid.addWidget(b_register, 4, 0, 1, 2)
+        grid.addWidget(b_qr, 5, 0, 1, 2)
+        grid.addWidget(b_send, 6, 0, 1, 2)
 
-tk.Label(frame_inputs, text="Program:").grid(row=2, column=0, sticky="e")
-entry_program = tk.Entry(frame_inputs)
-entry_program.grid(row=2, column=1)
+        vbox = QVBoxLayout()
+        vbox.addLayout(grid)
+        vbox.addWidget(self.qr_label)
 
-tk.Label(frame_inputs, text="Role:").grid(row=3, column=0, sticky="e")
-role_combobox = ttk.Combobox(frame_inputs, values=["student", "professor", "administrative"], state="readonly")
-role_combobox.grid(row=3, column=1)
-role_combobox.set("student")  # Set default value
+        widget = QWidget()
+        widget.setLayout(vbox)
+        self.setCentralWidget(widget)
+        self.setWindowFlags(Qt.MSWindowsFixedSizeDialogHint)
 
-# Create buttons for actions
-frame_buttons = tk.Frame(root, padx=10, pady=10)
-frame_buttons.pack()
+    def register_user(self):
+        id = self.e1.text()
+        password = self.e2.text()
+        program = self.e3.text()
+        role = self.role_combo.currentText()
+        if not id or not password or not program or not role:
+            QMessageBox.critical(self, "Error", "Todos los campos son obligatorios.")
+            return
+        response = parking_client.registerUser(SERVER_URL, id, password, program, role)
+        QMessageBox.information(self, "Registro", response)
 
-btn_register = tk.Button(frame_buttons, text="Register User", command=register_user)
-btn_register.grid(row=0, column=0, padx=5)
+    def request_qr(self):
+        id = self.e1.text()
+        password = self.e2.text()
+        if not id or not password:
+            QMessageBox.critical(self, "Error", "ID y contraseña requeridos.")
+            return
+        imgBytes = parking_client.getQR(SERVER_URL, id, password)
+        if not imgBytes:
+            QMessageBox.critical(self, "Error", "Usuario no existe o contraseña incorrecta.")
+            return
 
-btn_request_qr = tk.Button(frame_buttons, text="Request QR Code", command=request_qr)
-btn_request_qr.grid(row=0, column=1, padx=5)
+        qr_folder = r"C:\Users\kkyto\Desktop\qr_codes"
+        os.makedirs(qr_folder, exist_ok=True)
+        qr_filename = f"qr_code_{id}_{int(datetime.now().timestamp())}.png"
+        save_path = os.path.join(qr_folder, qr_filename)
 
-btn_send_qr = tk.Button(frame_buttons, text="Send QR Code", command=send_qr)
-btn_send_qr.grid(row=0, column=2, padx=5)
+        image = Image.open(io.BytesIO(imgBytes))
+        image.save(save_path)
 
-# Create a label to display the QR code
-qr_label = tk.Label(root, text="QR Code will appear here", padx=10, pady=10)
-qr_label.pack()
+        pixmap = QPixmap(save_path).scaled(200, 200, Qt.KeepAspectRatio)
+        self.qr_label.setPixmap(pixmap)
+        self.qr_label.setText("")
+        QMessageBox.information(self, "QR Code", f"Código QR guardado en {save_path}")
 
-# Run the application
-root.mainloop()
+    def send_qr(self):
+        self.camera_window = CameraWindow()
+        self.camera_thread = CameraThread()
+        self.camera_thread.frame_signal.connect(self.camera_window.update_frame)
+        self.camera_thread.qr_result_signal.connect(self.show_qr_result)
+        self.camera_window.show()
+        self.camera_thread.start()
+
+    def show_qr_result(self, result):
+        self.camera_window.close()
+        QMessageBox.information(self, "Código QR escaneado", result)
+        self.camera_thread.is_running = False
+
+if __name__ == "__main__":
+    import sys
+    app = QApplication(sys.argv)
+    ex = MainWindow()
+    ex.show()
+    app.exec()

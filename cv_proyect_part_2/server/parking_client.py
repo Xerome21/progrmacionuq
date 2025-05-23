@@ -1,5 +1,5 @@
 # Instalar el módulo requests haciendo desde una terminal: pip install requests
-import requests
+import requests 
 
 
 # Función para registrar usuario
@@ -20,18 +20,16 @@ def getQR(url,id,password):
     
 
 # Función para enviar el código QR y así permitir el ingreso
-def sendQR(url, qr_image):
-    headers = {'Content-type': 'image/png'}
-    with open(qr_image, 'rb') as file:
-        response = requests.post(url + "/sendqr", data=file, headers=headers)
-    
-    # Print the server's response
-    if response.status_code == 200:
-        print("QR Code Information:", response.content.decode('utf-8'))
-    else:
-        print(f"Error: {response.text}")
-    
-    return response.content
+def sendQR(url, qr_text):
+    """
+    Envía el texto del QR (no la imagen) al servidor.
+    """
+    endpoint = f"{url}/sendqr"
+    try:
+        response = requests.post(endpoint, data=qr_text.encode('utf-8'), headers={'Content-Type': 'text/plain'})
+        return response.text
+    except Exception as e:
+        return f"Error al enviar QR: {e}"
 
 
 

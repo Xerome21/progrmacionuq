@@ -167,6 +167,10 @@ def cleanup_expired_qrs():
 
 # Función que registra un usuario
 def registerUser(id, password, program, role):
+    # Forzar un error si el id es 1234 para pruebas de depuración
+    if str(id) == "1234":
+        raise Exception("Error de prueba: ID 1234 no permitido (debug)")
+
     try:
         # Intentamos abrir el archivo para ver si existe y leer los usuarios actuales
         with open(usersFileName, 'r') as file:
@@ -178,8 +182,9 @@ def registerUser(id, password, program, role):
             if user_data.get('id') == id:
                 return "User already registered"
     except FileNotFoundError:
-        # Si el archivo no existe, creamos una lista vacía de usuarios
-        users = []
+        # Si el archivo no existe, lo creamos
+        with open(usersFileName, 'w') as file:
+            file.write("")
     
     # Generar hash de la contraseña para almacenarla segura
     password_hash = sha256(password.encode()).hexdigest()
@@ -225,13 +230,10 @@ def getQR(id, password):
         return None
 
 # Función que procesa el código QR enviado
-def sendQR(png):
+def sendQR(qr_text):
     try:
-        # Decode the QR code
-        decodedQR = decode(Image.open(io.BytesIO(png)))[0].data.decode('ascii')
-
-        # Convert the JSON in the QR code text to a dictionary
-        data = loads(decodedQR)
+        # qr_text ya es el JSON decodificado del QR
+        data = loads(qr_text)
 
         # Decrypt with the current key, decoding from base64 first
         decrypted = loads(decrypt_AES_GCM((
@@ -277,6 +279,19 @@ def sendQR(png):
                     'professor': ['B1', 'B2', 'B3'],
                     'administrative': ['C1', 'C2']
                 }
+
+            # Sincronizar con el estado real de los lugares detectados
+            try:
+                with open("spots_status.json", "r") as f:
+                    spots_status = loads(f.read())
+                # Remover lugares ocupados de available_spots
+                for role_key in available_spots:
+                    available_spots[role_key] = [
+                        spot for spot in available_spots[role_key]
+                        if not spots_status.get(spot, False)
+                    ]
+            except FileNotFoundError:
+                pass  # Si no existe el archivo, sigue como está
 
             role = decrypted.get('role').lower()
             assigned_spots_file = "assigned_spots.json"
